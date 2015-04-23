@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"io"
@@ -76,6 +77,28 @@ func NewSecureWriter(w io.Writer, priv, pub *[32]byte) io.Writer {
 	return &SecureWriter{w, &KeyPair{private: priv, public: pub}}
 }
 
+type SecureReadWriterCloser struct {
+	reader io.Reader
+	writer io.Writer
+}
+
+func (srwc SecureReadWriterCloser) Read(p []byte) (int, error) {
+	return srwc.reader.Read(p)
+}
+
+func (srwc SecureReadWriterCloser) Write(p []byte) (int, error) {
+	return srwc.writer.Write(p)
+}
+
+func (srwc SecureReadWriterCloser) Close() error {
+	return nil
+}
+
+type Handshake struct {
+	localPublicKey  [32]byte
+	remotePublicKey [32]byte
+}
+
 func getNonce() ([24]byte, error) {
 	var nonce [24]byte
 	_, err := io.ReadFull(rand.Reader, nonce[:])
@@ -89,11 +112,99 @@ func getNonce() ([24]byte, error) {
 // connects to the server, perform the handshake
 // and return a reader/writer.
 func Dial(addr string) (io.ReadWriteCloser, error) {
-	return nil, nil
+	kp, err := generateKeyPair()
+	if err != nil {
+		return nil, err
+	}
+
+	// dial
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	hs := &Handshake{
+		localPublicKey: *kp.public,
+	}
+
+	// handshake
+	err = handshake(conn, hs)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &SecureReadWriterCloser{
+		NewSecureReader(conn, kp.private, &hs.remotePublicKey),
+		NewSecureWriter(conn, kp.private, &hs.remotePublicKey),
+	}, nil
+}
+
+func generateKeyPair() (*KeyPair, error) {
+	public, private, err := box.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+
+	return &KeyPair{public: public, private: private}, nil
 }
 
 // Serve starts a secure echo server on the given listener.
 func Serve(l net.Listener) error {
+	defer l.Close()
+
+	kp, err := generateKeyPair()
+
+	if err != nil {
+		return err
+	}
+
+	for {
+		conn, e := l.Accept()
+		if e != nil {
+			return e
+		}
+		// Should we use a KeyPair per client?
+		serve(conn, kp)
+	}
+
+	return nil
+}
+
+func serve(conn net.Conn, kp *KeyPair) error {
+	defer conn.Close()
+
+	hs := &Handshake{
+		localPublicKey: *kp.public,
+	}
+
+	if err := handshake(conn, hs); err != nil {
+		return err
+	}
+
+	secureR := NewSecureReader(conn, kp.private, &hs.remotePublicKey)
+	secureW := NewSecureWriter(conn, kp.private, &hs.remotePublicKey)
+
+	buf := make([]byte, 32*1024)
+	n, _ := secureR.Read(buf)
+	n, _ = secureW.Write(buf[:n])
+
+	return nil
+}
+
+func handshake(conn net.Conn, hs *Handshake) error {
+	err := binary.Write(conn, binary.LittleEndian, hs.localPublicKey)
+
+	if err != nil {
+		return err
+	}
+
+	err = binary.Read(conn, binary.LittleEndian, &hs.remotePublicKey)
+
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
