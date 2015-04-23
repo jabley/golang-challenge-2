@@ -13,17 +13,18 @@ import (
 	"golang.org/x/crypto/nacl/box"
 )
 
-type KeyPair struct {
+// keyPair contains public and private keys for encryption
+type keyPair struct {
 	public  *[32]byte
 	private *[32]byte
 }
 
-type SecureReader struct {
+type secureReader struct {
 	r  io.Reader
-	kp *KeyPair
+	kp *keyPair
 }
 
-func (sr SecureReader) Read(p []byte) (n int, err error) {
+func (sr *secureReader) Read(p []byte) (n int, err error) {
 
 	// The maximum expected size of message is 32 kilobytes
 	buf := make([]byte, 32*1024)
@@ -51,17 +52,17 @@ func (sr SecureReader) Read(p []byte) (n int, err error) {
 	return len(opened), nil
 }
 
-// NewSecureReader instantiates a new SecureReader
+// NewSecureReader instantiates a new secureReader
 func NewSecureReader(r io.Reader, priv, pub *[32]byte) io.Reader {
-	return &SecureReader{r, &KeyPair{private: priv, public: pub}}
+	return &secureReader{r, &keyPair{private: priv, public: pub}}
 }
 
-type SecureWriter struct {
+type secureWriter struct {
 	w  io.Writer
-	kp *KeyPair
+	kp *keyPair
 }
 
-func (sw SecureWriter) Write(p []byte) (n int, err error) {
+func (sw *secureWriter) Write(p []byte) (n int, err error) {
 	nonce, err := getNonce()
 
 	if err != nil {
@@ -72,29 +73,29 @@ func (sw SecureWriter) Write(p []byte) (n int, err error) {
 	return sw.w.Write(sealed)
 }
 
-// NewSecureWriter instantiates a new SecureWriter
+// NewSecureWriter instantiates a new secureWriter
 func NewSecureWriter(w io.Writer, priv, pub *[32]byte) io.Writer {
-	return &SecureWriter{w, &KeyPair{private: priv, public: pub}}
+	return &secureWriter{w, &keyPair{private: priv, public: pub}}
 }
 
-type SecureReadWriterCloser struct {
+type secureReadWriteCloser struct {
 	reader io.Reader
 	writer io.Writer
 }
 
-func (srwc SecureReadWriterCloser) Read(p []byte) (int, error) {
+func (srwc *secureReadWriteCloser) Read(p []byte) (int, error) {
 	return srwc.reader.Read(p)
 }
 
-func (srwc SecureReadWriterCloser) Write(p []byte) (int, error) {
+func (srwc *secureReadWriteCloser) Write(p []byte) (int, error) {
 	return srwc.writer.Write(p)
 }
 
-func (srwc SecureReadWriterCloser) Close() error {
+func (srwc *secureReadWriteCloser) Close() error {
 	return nil
 }
 
-type Handshake struct {
+type handshake struct {
 	localPublicKey  [32]byte
 	remotePublicKey [32]byte
 }
@@ -112,41 +113,43 @@ func getNonce() ([24]byte, error) {
 // connects to the server, perform the handshake
 // and return a reader/writer.
 func Dial(addr string) (io.ReadWriteCloser, error) {
+	// generate a private/public key pair
 	kp, err := generateKeyPair()
 	if err != nil {
 		return nil, err
 	}
 
-	// dial
+	// connect to the server
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
 
-	hs := &Handshake{
+	hs := &handshake{
 		localPublicKey: *kp.public,
 	}
 
-	// handshake
-	err = handshake(conn, hs)
+	// perform the handshake
+	err = negotiate(conn, hs)
 
 	if err != nil {
 		return nil, err
 	}
 
-	return &SecureReadWriterCloser{
+	// return a reader/writer
+	return &secureReadWriteCloser{
 		NewSecureReader(conn, kp.private, &hs.remotePublicKey),
 		NewSecureWriter(conn, kp.private, &hs.remotePublicKey),
 	}, nil
 }
 
-func generateKeyPair() (*KeyPair, error) {
+func generateKeyPair() (*keyPair, error) {
 	public, private, err := box.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
 
-	return &KeyPair{public: public, private: private}, nil
+	return &keyPair{public: public, private: private}, nil
 }
 
 // Serve starts a secure echo server on the given listener.
@@ -167,18 +170,16 @@ func Serve(l net.Listener) error {
 		// Should we use a KeyPair per client?
 		serve(conn, kp)
 	}
-
-	return nil
 }
 
-func serve(conn net.Conn, kp *KeyPair) error {
+func serve(conn net.Conn, kp *keyPair) error {
 	defer conn.Close()
 
-	hs := &Handshake{
+	hs := &handshake{
 		localPublicKey: *kp.public,
 	}
 
-	if err := handshake(conn, hs); err != nil {
+	if err := negotiate(conn, hs); err != nil {
 		return err
 	}
 
@@ -192,7 +193,7 @@ func serve(conn net.Conn, kp *KeyPair) error {
 	return nil
 }
 
-func handshake(conn net.Conn, hs *Handshake) error {
+func negotiate(conn net.Conn, hs *handshake) error {
 	err := binary.Write(conn, binary.LittleEndian, hs.localPublicKey)
 
 	if err != nil {
