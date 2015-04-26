@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"time"
 
 	"golang.org/x/crypto/nacl/box"
 )
@@ -194,6 +195,8 @@ func serve(conn net.Conn, kp *keyPair) error {
 }
 
 func negotiate(conn net.Conn, hs *handshake) error {
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+
 	err := binary.Write(conn, binary.LittleEndian, hs.localPublicKey)
 
 	if err != nil {
