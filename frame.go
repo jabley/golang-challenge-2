@@ -39,7 +39,8 @@ type Framer struct {
 	getReadBuf func(size uint32) []byte
 	readBuf    []byte // cache for default getReadBuf
 
-	wbuf []byte
+	wbuf   []byte
+	unread []byte
 }
 
 // NewFramer returns a Framer that writes frames to w and reads them from r.
@@ -56,6 +57,31 @@ func NewFramer(w io.Writer, r io.Reader) *Framer {
 		return fr.readBuf
 	}
 	return fr
+}
+
+func (fr *Framer) HasUnreadPortion() bool {
+	return fr.unread != nil
+}
+
+func (fr *Framer) ReadPayload(p []byte) (int, error) {
+	dstLen := len(p)
+	srcLen := len(fr.unread)
+
+	if srcLen == 0 {
+		fr.unread = nil
+		return 0, io.EOF
+	}
+
+	if dstLen >= srcLen {
+		copy(p, fr.unread)
+		fr.unread = fr.unread[srcLen:]
+		return srcLen, nil
+	} else {
+		// We need to buffer the read of this message - provided buffer is too small to hold the entire message
+		copy(p, fr.unread[:dstLen])
+		fr.unread = fr.unread[dstLen:]
+		return dstLen, nil
+	}
 }
 
 func (fr *Framer) getNonce() ([24]byte, error) {
@@ -81,7 +107,7 @@ func readFrameHeader(buf []byte, r io.Reader) (frameHeader, error) {
 	}
 
 	var nonce [24]byte
-	
+
 	copy(nonce[:], buf[3:frameHeaderLen])
 
 	return frameHeader{

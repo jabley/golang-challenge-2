@@ -26,6 +26,11 @@ type secureReader struct {
 }
 
 func (sr *secureReader) Read(p []byte) (n int, err error) {
+	// Was all of the previous message frame been consumed?
+	if sr.fr.HasUnreadPortion() {
+		return sr.fr.ReadPayload(p)
+	}
+
 	fh, err := sr.fr.ReadFrameHeader(sr.fr.r)
 
 	if err != nil {
@@ -43,8 +48,8 @@ func (sr *secureReader) Read(p []byte) (n int, err error) {
 		return 0, fmt.Errorf("Could not decrypt message.")
 	}
 
-	copy(p, opened)
-	return len(opened), nil
+	sr.fr.unread = opened
+	return sr.fr.ReadPayload(p)
 }
 
 // NewSecureReader instantiates a new secureReader

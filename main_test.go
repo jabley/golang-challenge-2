@@ -35,6 +35,39 @@ func TestReadWriterPing(t *testing.T) {
 	}
 }
 
+func TestReadWithSmallBuffer(t *testing.T) {
+	priv, pub := &[32]byte{'p', 'r', 'i', 'v'}, &[32]byte{'p', 'u', 'b'}
+
+	r, w := io.Pipe()
+	secureR := NewSecureReader(r, priv, pub)
+	secureW := NewSecureWriter(w, priv, pub)
+
+	// Encrypt hello world
+	go func() {
+		fmt.Fprintf(secureW, "hello world\n")
+		w.Close()
+	}()
+
+	// Decrypt message
+	var acc []byte
+	buf := make([]byte, 1)
+	for {
+		_, err := secureR.Read(buf)
+		if err != nil && err != io.EOF {
+			t.Fatal(err)
+		}
+		if err == io.EOF {
+			break
+		}
+		acc = append(acc, buf...)
+	}
+
+	// Make sure we have hello world back
+	if res := string(acc); res != "hello world\n" {
+		t.Fatalf("Unexpected result: %s != %s", res, "hello world")
+	}
+}
+
 func TestSecureWriter(t *testing.T) {
 	priv, pub := &[32]byte{'p', 'r', 'i', 'v'}, &[32]byte{'p', 'u', 'b'}
 
