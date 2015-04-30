@@ -21,62 +21,59 @@ type keyPair struct {
 }
 
 type secureReader struct {
-	r  io.Reader
+	fr *Framer
 	kp *keyPair
 }
 
 func (sr *secureReader) Read(p []byte) (n int, err error) {
+	fh, err := sr.fr.ReadFrameHeader(sr.fr.r)
 
-	// The maximum expected size of message is 32 kilobytes
-	buf := make([]byte, 32*1024)
-
-	n, err = sr.r.Read(buf)
 	if err != nil {
+		return 0, fmt.Errorf("Unable to read frame header: %v\n", err)
+	}
+
+	payload := sr.fr.getReadBuf(fh.Length)
+
+	if _, err := io.ReadFull(io.LimitReader(sr.fr.r, int64(fh.Length)), payload); err != nil {
 		return 0, err
 	}
 
-	// Nonce must be a 24 byte array for the nacl Open method
-	if n < 24 {
-		return 0, fmt.Errorf("Nonce was %d bytes. Must be 24 bytes.", n)
-	}
-	var nonce [24]byte
-
-	copy(nonce[:], buf[:24])
-
-	opened, ok := box.Open(nil, buf[24:n], &nonce, sr.kp.public, sr.kp.private)
-	if ok != true {
+	opened, ok := box.Open(nil, payload, &fh.Nonce, sr.kp.public, sr.kp.private)
+	if !ok {
 		return 0, fmt.Errorf("Could not decrypt message.")
 	}
 
 	copy(p, opened)
-
 	return len(opened), nil
 }
 
 // NewSecureReader instantiates a new secureReader
 func NewSecureReader(r io.Reader, priv, pub *[32]byte) io.Reader {
-	return &secureReader{r, &keyPair{private: priv, public: pub}}
+	fr := NewFramer(nil, r)
+	return &secureReader{fr, &keyPair{private: priv, public: pub}}
 }
 
 type secureWriter struct {
-	w  io.Writer
+	fr *Framer
 	kp *keyPair
 }
 
 func (sw *secureWriter) Write(p []byte) (n int, err error) {
-	nonce, err := getNonce()
+	nonce, err := sw.fr.getNonce()
 
 	if err != nil {
 		return 0, err
 	}
 
 	sealed := box.Seal(nonce[:], p, &nonce, sw.kp.public, sw.kp.private)
-	return sw.w.Write(sealed)
+
+	return sw.fr.Write(sealed)
 }
 
 // NewSecureWriter instantiates a new secureWriter
 func NewSecureWriter(w io.Writer, priv, pub *[32]byte) io.Writer {
-	return &secureWriter{w, &keyPair{private: priv, public: pub}}
+	fr := NewFramer(w, nil)
+	return &secureWriter{fr, &keyPair{private: priv, public: pub}}
 }
 
 type secureReadWriteCloser struct {
@@ -99,15 +96,6 @@ func (srwc *secureReadWriteCloser) Close() error {
 type handshake struct {
 	localPublicKey  [32]byte
 	remotePublicKey [32]byte
-}
-
-func getNonce() ([24]byte, error) {
-	var nonce [24]byte
-	_, err := io.ReadFull(rand.Reader, nonce[:])
-	if err != nil {
-		return nonce, fmt.Errorf("Could not read from rand.Read(): %s.", err)
-	}
-	return nonce, nil
 }
 
 // Dial generates a private/public key pair,
