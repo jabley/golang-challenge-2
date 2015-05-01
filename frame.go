@@ -59,11 +59,13 @@ func NewFramer(w io.Writer, r io.Reader) *Framer {
 	return fr
 }
 
+// HasUnreadPortion returns true if not all of the previous frame has been consumed, otherwise false.
 func (fr *Framer) HasUnreadPortion() bool {
 	return fr.unread != nil
 }
 
-func (fr *Framer) ReadPayload(p []byte) (int, error) {
+// Read reads up to len(p) bytes into p.
+func (fr *Framer) Read(p []byte) (int, error) {
 	dstLen := len(p)
 	srcLen := len(fr.unread)
 
@@ -76,12 +78,12 @@ func (fr *Framer) ReadPayload(p []byte) (int, error) {
 		copy(p, fr.unread)
 		fr.unread = fr.unread[srcLen:]
 		return srcLen, nil
-	} else {
-		// We need to buffer the read of this message - provided buffer is too small to hold the entire message
-		copy(p, fr.unread[:dstLen])
-		fr.unread = fr.unread[dstLen:]
-		return dstLen, nil
 	}
+
+	// We need to buffer the read of this message - provided buffer is too small to hold the entire message
+	copy(p, fr.unread[:dstLen])
+	fr.unread = fr.unread[dstLen:]
+	return dstLen, nil
 }
 
 func (fr *Framer) getNonce() ([24]byte, error) {
@@ -94,22 +96,22 @@ func (fr *Framer) getNonce() ([24]byte, error) {
 }
 
 // ReadFrameHeader reads 27 bytes from r and returns a FrameHeader.
-func (fr *Framer) ReadFrameHeader(r io.Reader) (frameHeader, error) {
+func (fr *Framer) ReadFrameHeader(r io.Reader) (FrameHeader, error) {
 	bufp := fhBytes.Get().(*[]byte)
 	defer fhBytes.Put(bufp)
 	return readFrameHeader(*bufp, r)
 }
 
-func readFrameHeader(buf []byte, r io.Reader) (frameHeader, error) {
+func readFrameHeader(buf []byte, r io.Reader) (FrameHeader, error) {
 	if _, err := io.ReadFull(r, buf[:frameHeaderLen]); err != nil {
-		return frameHeader{}, err
+		return FrameHeader{}, err
 	}
 
 	var nonce [24]byte
 
 	copy(nonce[:], buf[3:frameHeaderLen])
 
-	return frameHeader{
+	return FrameHeader{
 		Length: (uint32(buf[0])<<16 | uint32(buf[1])<<8 | uint32(buf[2])),
 		Nonce:  nonce,
 	}, nil
@@ -152,7 +154,13 @@ func (fr *Framer) endWrite() error {
 	return err
 }
 
-type frameHeader struct {
+// FrameHeader is the common header for our message format
+// +--------------------------+
+// | Length of data (24 bits) |
+// +--------------------------+
+// | Nonce (24 bytes)         |
+// +----------------------------------+
+type FrameHeader struct {
 	// Length is the length of the frame, not including the 9 byte header.
 	// The maximum size is one byte less than 16MB (uint24), but only
 	// frames up to 16KB are allowed without peer agreement.
@@ -162,7 +170,7 @@ type frameHeader struct {
 	Nonce [24]byte
 }
 
-func (fh *frameHeader) String() string {
+func (fh *FrameHeader) String() string {
 	var buf bytes.Buffer
 	buf.WriteString("[FrameHeader ")
 	fmt.Fprintf(&buf, " nonce=%q", fh.Nonce)

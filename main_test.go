@@ -68,6 +68,33 @@ func TestReadWithSmallBuffer(t *testing.T) {
 	}
 }
 
+func TestShortReads(t *testing.T) {
+	priv, pub := &[32]byte{'p', 'r', 'i', 'v'}, &[32]byte{'p', 'u', 'b'}
+
+	r, w := io.Pipe()
+	secureR := NewSecureReader(&shortReader{r: r}, priv, pub)
+	secureW := NewSecureWriter(w, priv, pub)
+
+	// Encrypt hello world
+	go func() {
+		fmt.Fprintf(secureW, "hello world\n")
+		w.Close()
+	}()
+
+	// Decrypt message
+	buf := make([]byte, 1024)
+	n, err := secureR.Read(buf)
+	if err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	buf = buf[:n]
+
+	// Make sure we have hello world back
+	if res := string(buf); res != "hello world\n" {
+		t.Fatalf("Unexpected result: %s != %s", res, "hello world")
+	}
+}
+
 func TestSecureWriter(t *testing.T) {
 	priv, pub := &[32]byte{'p', 'r', 'i', 'v'}, &[32]byte{'p', 'u', 'b'}
 
@@ -216,4 +243,12 @@ func TestSecureDial(t *testing.T) {
 	if _, err := fmt.Fprintf(conn, expected); err != nil {
 		t.Fatal(err)
 	}
+}
+
+type shortReader struct {
+	r io.Reader
+}
+
+func (s *shortReader) Read(buf []byte) (int, error) {
+	return s.r.Read(buf[0:1])
 }

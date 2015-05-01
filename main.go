@@ -28,9 +28,10 @@ type secureReader struct {
 func (sr *secureReader) Read(p []byte) (n int, err error) {
 	// Was all of the previous message frame consumed?
 	if sr.fr.HasUnreadPortion() {
-		return sr.fr.ReadPayload(p)
+		return sr.fr.Read(p)
 	}
 
+	// Read the framed message
 	fh, err := sr.fr.ReadFrameHeader(sr.fr.r)
 
 	if err != nil {
@@ -49,7 +50,7 @@ func (sr *secureReader) Read(p []byte) (n int, err error) {
 	}
 
 	sr.fr.unread = opened
-	return sr.fr.ReadPayload(p)
+	return sr.fr.Read(p)
 }
 
 // NewSecureReader instantiates a new secureReader
