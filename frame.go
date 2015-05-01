@@ -101,8 +101,7 @@ func (fr *Framer) ReadFrameHeader(r io.Reader) (frameHeader, error) {
 }
 
 func readFrameHeader(buf []byte, r io.Reader) (frameHeader, error) {
-	_, err := io.ReadFull(r, buf[:frameHeaderLen])
-	if err != nil {
+	if _, err := io.ReadFull(r, buf[:frameHeaderLen]); err != nil {
 		return frameHeader{}, err
 	}
 
