@@ -26,7 +26,7 @@ type secureReader struct {
 }
 
 func (sr *secureReader) Read(p []byte) (n int, err error) {
-	// Was all of the previous message frame been consumed?
+	// Was all of the previous message frame consumed?
 	if sr.fr.HasUnreadPortion() {
 		return sr.fr.ReadPayload(p)
 	}
