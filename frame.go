@@ -39,16 +39,18 @@ type Framer struct {
 	getReadBuf func(size uint32) []byte
 	readBuf    []byte // cache for default getReadBuf
 
-	wbuf   []byte
-	unread []byte
+	unread []byte // used to hold the decoded message when reading
+
+	werr error // the first write error that occurred
 }
 
 // NewFramer returns a Framer that writes frames to w and reads them from r.
 func NewFramer(w io.Writer, r io.Reader) *Framer {
 	fr := &Framer{
-		w: w,
 		r: r,
 	}
+	fr.w = stickyErrWriter{w, &fr.werr}
+
 	fr.getReadBuf = func(size uint32) []byte {
 		if cap(fr.readBuf) >= int(size) {
 			return fr.readBuf[:size]
@@ -118,40 +120,22 @@ func readFrameHeader(buf []byte, r io.Reader) (FrameHeader, error) {
 }
 
 func (fr *Framer) Write(p []byte) (int, error) {
-	// write the nonce and data
-	fr.startWrite()
-	fr.writeBytes(p)
-	// wrote nonce, data and length bytes
-	return len(p) + 3, fr.endWrite()
-}
+	length := len(p) - 24
 
-func (fr *Framer) writeBytes(p []byte) {
-	fr.wbuf = append(fr.wbuf, p...)
-}
-
-func (fr *Framer) startWrite() {
-	fr.wbuf = append(fr.wbuf[:0],
-		0,
-		0,
-		0)
-}
-
-func (fr *Framer) endWrite() error {
-	// Now that we know the final size, fill in the FrameHeader in
-	// the space previously reserved for it. Abuse append.
-	length := len(fr.wbuf) - frameHeaderLen
 	if length >= (1 << 24) {
-		return ErrFrameTooLarge
+		return 0, ErrFrameTooLarge
 	}
-	_ = append(fr.wbuf[:0],
-		byte(length>>16),
-		byte(length>>8),
-		byte(length))
-	n, err := fr.w.Write(fr.wbuf)
-	if err == nil && n != len(fr.wbuf) {
+
+	// write length
+	n, _ := fr.w.Write([]byte{byte(length >> 16), byte(length >> 8), byte(length)})
+	// write nonce and data
+	m, err := fr.w.Write(p)
+
+	if err == nil && (n+m != length+frameHeaderLen) {
 		err = io.ErrShortWrite
 	}
-	return err
+
+	return n + m, err
 }
 
 // FrameHeader is the common header for our message format
@@ -176,4 +160,19 @@ func (fh *FrameHeader) String() string {
 	fmt.Fprintf(&buf, " nonce=%q", fh.Nonce)
 	fmt.Fprintf(&buf, " len=%d]", fh.Length)
 	return buf.String()
+}
+
+type stickyErrWriter struct {
+	w   io.Writer
+	err *error
+}
+
+func (sew stickyErrWriter) Write(p []byte) (n int, err error) {
+	if *sew.err != nil {
+		return 0, *sew.err
+	}
+
+	n, err = sew.w.Write(p)
+	*sew.err = err
+	return
 }
